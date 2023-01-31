@@ -222,7 +222,7 @@ resource "kubernetes_secret" "tls" {
 
   # wait for kube config file to be created
   depends_on = [ 
-    local_file.kube_config
+    rke_cluster.cluster
   ]
 }
 
@@ -250,7 +250,6 @@ resource "helm_release" "rancher" {
     value = "secret"
   }
   
-  # if a rancherImageTag is used (not a chart) then set parameter for rancherImageTag needs to be uncommented and specified 
   set {
     name  = "rancherImageTag"
     value = var.rancher_tag_version
@@ -258,7 +257,7 @@ resource "helm_release" "rancher" {
 
   # wait for tls secret to be created
   depends_on = [ 
-    kubernetes_secret.tls
+    rke_cluster.cluster
   ]
 }
 
