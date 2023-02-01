@@ -36,7 +36,7 @@ provider "local" {
 }
 
 provider "helm" {
-  # kube config location to be used by helm to connect to the cluster
+  # # kube config location to be used by helm to connect to the cluster
   kubernetes {
     config_path = var.kube_config_path
   }
@@ -59,6 +59,8 @@ resource "aws_instance" "aws_instance" {
 
   tags = {
     Name = "${var.aws_prefix}-${count.index}"
+    Owner = var.aws_owner_tag
+    DoNotDelete = var.aws_do_not_delete_tag
   }
 }
 
@@ -194,6 +196,10 @@ resource "rke_cluster" "cluster" {
     user    = "ubuntu"
     role    = ["controlplane", "worker", "etcd"]
   }  
+
+  depends_on = [
+    aws_instance.aws_instance
+  ]
 }
 
 ############################# L O C A L   S E T U P #############################
@@ -278,6 +284,8 @@ variable "aws_key_name" {}
 variable "aws_instance_size" {}
 variable "aws_vpc" {}
 variable "aws_route_zone_name" {}
+variable "aws_owner_tag" {}
+variable "aws_do_not_delete_tag" {}
 variable "ssh_private_key_path" {}
 variable "kube_config_path" {}
 variable "rancher_tag_version" {}
