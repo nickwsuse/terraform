@@ -43,6 +43,6 @@ terraform.tfvars.json
 
 # Ignore the variables file, kubeconfig, and tls files
 variables.sh
-tfkubeconfig
 tls.cert
 tls.key
+*.yaml

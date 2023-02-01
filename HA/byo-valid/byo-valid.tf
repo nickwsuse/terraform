@@ -18,6 +18,10 @@ terraform {
       source = "hashicorp/helm"
       version = "2.4.1"
     }
+    kubernetes = {
+      source = "hashicorp/kubernetes"
+      version = "2.17.0"
+    }
   }
 }
 
@@ -37,9 +41,14 @@ provider "local" {
 
 provider "helm" {
   # # kube config location to be used by helm to connect to the cluster
-  kubernetes {
+    kubernetes {
     config_path = var.kube_config_path
   }
+}
+
+provider "kubernetes" {
+  # configuration options
+  config_path = var.kube_config_path
 }
 
 ############################# E C 2   I N F R A S T R U C T U R E #############################
@@ -195,11 +204,7 @@ resource "rke_cluster" "cluster" {
     internal_address = aws_instance.aws_instance[2].private_ip
     user    = "ubuntu"
     role    = ["controlplane", "worker", "etcd"]
-  }  
-
-  depends_on = [
-    aws_instance.aws_instance
-  ]
+  } 
 }
 
 ############################# L O C A L   S E T U P #############################
@@ -214,21 +219,32 @@ resource "local_file" "kube_config" {
 }
 
 ############################# H E L M #############################
+resource "kubernetes_namespace" "cattle_system"{
+  metadata {
+    name = "cattle-system"
+  }
+
+  depends_on = [
+    local_file.kube_config
+  ]
+}
+
 resource "kubernetes_secret" "tls" {
   metadata {
-    name = "tls"
+    name = "tls-rancher-ingress"
+    namespace = kubernetes_namespace.cattle_system.metadata[0].name
   }
 
   data = {
-    cert = file(var.tls_cert)
-    key = file(var.tls_key)
+    "tls.crt" = file(var.tls_cert)
+    "tls.key" = file(var.tls_key)
   }
 
-  type = "certificates.k8s.io"
+  type = "kubernetes.io/tls"
 
   # wait for kube config file to be created
   depends_on = [ 
-    rke_cluster.cluster
+    kubernetes_namespace.cattle_system
   ]
 }
 
@@ -238,15 +254,19 @@ resource "helm_release" "rancher" {
   repository = "https://releases.rancher.com/server-charts/latest"
   chart      = "rancher"
   version    = var.rancher_chart_version
-  create_namespace = "true"
   namespace = "cattle-system"
 
   set {
     name  = "hostname"
     value = aws_route53_record.route_53_record.fqdn
+  } 
+  
+  set {
+    name  = "rancherImageTag"
+    value = var.rancher_tag_version
   }
 
-  set {
+   set {
     name  = "bootstrapPassword"
     value = var.rancher_password
   }
@@ -255,15 +275,10 @@ resource "helm_release" "rancher" {
     name = "ingress.tls.source"
     value = "secret"
   }
-  
-  set {
-    name  = "rancherImageTag"
-    value = var.rancher_tag_version
-  }
 
   # wait for tls secret to be created
   depends_on = [ 
-    rke_cluster.cluster
+    kubernetes_secret.tls    
   ]
 }
 

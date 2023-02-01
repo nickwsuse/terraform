@@ -203,6 +203,10 @@ resource "rke_cluster" "cluster" {
 resource "local_file" "kube_config" {
   content     = "${rke_cluster.cluster.kube_config_yaml}"
   filename = var.kube_config_path
+
+  depends_on = [
+    rke_cluster.cluster
+  ]
 }
 
 ############################# H E L M #############################
