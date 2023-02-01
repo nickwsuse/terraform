@@ -59,6 +59,8 @@ resource "aws_instance" "aws_instance" {
 
   tags = {
     Name = "${var.aws_prefix}-${count.index}"
+    Owner = var.aws_owner_tag
+    DoNotDelete = var.aws_do_not_delete_tag
   }
 }
 
@@ -201,10 +203,6 @@ resource "rke_cluster" "cluster" {
 resource "local_file" "kube_config" {
   content     = "${rke_cluster.cluster.kube_config_yaml}"
   filename = var.kube_config_path
-
-  depends_on = [
-    rke_cluster.cluster
-  ]
 }
 
 ############################# H E L M #############################
@@ -224,7 +222,7 @@ resource "helm_release" "certs" {
 
   # wait for kube config file to be created
   depends_on = [ 
-    rke_cluster.cluster
+    local_file.kube_config
   ]
 }
 
@@ -246,7 +244,7 @@ resource "helm_release" "rancher" {
     name  = "bootstrapPassword"
     value = var.rancher_password
   }
-    
+
   set {
     name  = "rancherImageTag"
     value = var.rancher_tag_version
@@ -275,6 +273,8 @@ variable "aws_key_name" {}
 variable "aws_instance_size" {}
 variable "aws_vpc" {}
 variable "aws_route_zone_name" {}
+variable "aws_owner_tag" {}
+variable "aws_do_not_delete_tag" {}
 variable "ssh_private_key_path" {}
 variable "kube_config_path" {}
 variable "rancher_tag_version" {}
