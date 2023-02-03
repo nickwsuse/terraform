@@ -8,7 +8,7 @@ terraform {
     }
     rke = {
       source = "rancher/rke"
-      version = "1.3.0"
+      version = "1.3.4"
     }
     local = {
       source = "hashicorp/local"
@@ -21,6 +21,11 @@ terraform {
     kubernetes = {
       source = "hashicorp/kubernetes"
       version = "2.17.0"
+    }
+
+    null = {
+      source = "hashicorp/null"
+      version = "3.2.1"
     }
   }
 }
@@ -40,21 +45,26 @@ provider "local" {
 }
 
 provider "helm" {
-  # # kube config location to be used by helm to connect to the cluster
+  # Configuration options
+  # kube config location to be used by helm to connect to the cluster
     kubernetes {
-    config_path = var.kube_config_path
+    config_path = "${local_file.kube_config.filename}"
   }
+}
+
+provider "null" {
+  # Configuration options
 }
 
 provider "kubernetes" {
   # configuration options
-  config_path = var.kube_config_path
+  config_path = "${local_file.kube_config.filename}"
 }
 
 ############################# E C 2   I N F R A S T R U C T U R E #############################
 ############################# I N S T A N C E S #############################
 # create 3 instances 
-resource "aws_instance" "aws_instance" {
+resource "aws_instance" "cluster" {
   count = 3
   ami                    = var.aws_ami
   instance_type          = var.aws_instance_type
@@ -67,18 +77,57 @@ resource "aws_instance" "aws_instance" {
   }
 
   tags = {
-    Name = "${var.aws_prefix}-${count.index}"
-    Owner = var.aws_owner_tag
+    Name        = "${var.aws_prefix}-${count.index}"
+    Owner       = var.aws_owner_tag
     DoNotDelete = var.aws_do_not_delete_tag
+  }
+}
+
+
+
+resource "null_resource" "set_initial_state" {
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command = "echo \"0\" > counter"
+  }
+}
+
+variable "index" {
+  type = number
+  default = 1 
+}
+
+resource "null_resource" "wait" {
+  provisioner "local-exec" {
+    interpreter = ["bash", "-c"]
+    command = "while [[ $(cat counter) != \"${var.index}\" ]]; do sleep 5; done; sleep 3;"
+  }
+}
+
+
+
+
+
+
+# The primary use-case for the null resource is as a do-nothing container
+# for arbitrary actions taken by a provisioner.
+#
+# Due to the triggers map, the null_resource will be replaced 
+# each time the instance ids # change, and thus the remote-exec 
+# provisioner will be re-run.
+resource "null_resource" "cluster" {
+  # Changes to any instance of the cluster requires re-provisioning
+  triggers = {
+    cluster_instance_ids = join(",", aws_instance.cluster.*.id)
   }
 }
 
 # print the instance info
 output "instance_public_ip" {
-  value = [for instance in aws_instance.aws_instance : instance.public_ip]
+  value = [for instance in aws_instance.cluster : instance.public_ip]
 }
 output "instance_private_ip" {
-  value = [for instance in aws_instance.aws_instance : instance.private_ip]
+  value = [for instance in aws_instance.cluster : instance.private_ip]
 }
 
 ############################# L O A D   B A L A N C I N G #############################
@@ -114,17 +163,17 @@ resource "aws_lb_target_group" "aws_lb_target_group_443" {
 
 # attach instances to the target group 80
 resource "aws_lb_target_group_attachment" "attach_tg_80" {
-  count = length(aws_instance.aws_instance)
+  count            = length(aws_instance.cluster)
   target_group_arn = aws_lb_target_group.aws_lb_target_group_80.arn
-  target_id        = aws_instance.aws_instance[count.index].id
+  target_id        = aws_instance.cluster[count.index].id
   port             = 80
 }
 
 # attach instances to the target group 443
 resource "aws_lb_target_group_attachment" "attach_tg_443" {
-  count = length(aws_instance.aws_instance)
+  count            = length(aws_instance.cluster)
   target_group_arn = aws_lb_target_group.aws_lb_target_group_443.arn
-  target_id        = aws_instance.aws_instance[count.index].id
+  target_id        = aws_instance.cluster[count.index].id
   port             = 443
 }
 
@@ -186,22 +235,23 @@ output "route_53_record" {
 # create a rke cluster
 resource "rke_cluster" "cluster" {
   ssh_key_path = var.ssh_private_key_path
+  kubernetes_version = var.k8s_version
 
   nodes {
-    address = aws_instance.aws_instance[0].public_ip
-    internal_address = aws_instance.aws_instance[0].private_ip
+    address          = aws_instance.cluster[0].public_ip
+    internal_address = aws_instance.cluster[0].private_ip
+    user             = "ubuntu"
+    role             = ["controlplane", "worker", "etcd"]
+  }
+    nodes {
+    address = aws_instance.cluster[1].public_ip
+    internal_address = aws_instance.cluster[1].private_ip
     user    = "ubuntu"
     role    = ["controlplane", "worker", "etcd"]
   }
     nodes {
-    address = aws_instance.aws_instance[1].public_ip
-    internal_address = aws_instance.aws_instance[1].private_ip
-    user    = "ubuntu"
-    role    = ["controlplane", "worker", "etcd"]
-  }
-    nodes {
-    address = aws_instance.aws_instance[2].public_ip
-    internal_address = aws_instance.aws_instance[2].private_ip
+    address = aws_instance.cluster[2].public_ip
+    internal_address = aws_instance.cluster[2].private_ip
     user    = "ubuntu"
     role    = ["controlplane", "worker", "etcd"]
   } 
@@ -210,12 +260,9 @@ resource "rke_cluster" "cluster" {
 ############################# L O C A L   S E T U P #############################
 # save kubeconfig file on the local 
 resource "local_file" "kube_config" {
+  depends_on  = [rke_cluster.cluster]
   content     = "${rke_cluster.cluster.kube_config_yaml}"
-  filename = var.kube_config_path
-
-  depends_on = [
-    rke_cluster.cluster
-  ]
+  filename    = var.kube_config_path
 }
 
 ############################# H E L M #############################
@@ -250,11 +297,12 @@ resource "kubernetes_secret" "tls" {
 
 # install rancher
 resource "helm_release" "rancher" {
+  depends_on = [rke_cluster.cluster]
   name       = "rancher"
   repository = "https://releases.rancher.com/server-charts/latest"
   chart      = "rancher"
   version    = var.rancher_chart_version
-  namespace = "cattle-system"
+  namespace  = "cattle-system"
 
   set {
     name  = "hostname"
@@ -275,11 +323,6 @@ resource "helm_release" "rancher" {
     name = "ingress.tls.source"
     value = "secret"
   }
-
-  # wait for tls secret to be created
-  depends_on = [ 
-    kubernetes_secret.tls    
-  ]
 }
 
 ############################# V A R I A B L E S #############################
@@ -302,6 +345,7 @@ variable "aws_route_zone_name" {}
 variable "aws_owner_tag" {}
 variable "aws_do_not_delete_tag" {}
 variable "ssh_private_key_path" {}
+variable "k8s_version" {}
 variable "kube_config_path" {}
 variable "rancher_tag_version" {}
 variable "rancher_chart_version" {}
