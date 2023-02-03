@@ -83,18 +83,13 @@ resource "aws_instance" "cluster" {
   }
 }
 
-
+############################# TEMPORARY (HOPEFULLY) SOLUTION TO RKE PROVISIONING RE-APPLY ISSUE #############################
 
 resource "null_resource" "set_initial_state" {
   provisioner "local-exec" {
     interpreter = ["bash", "-c"]
     command = "echo \"0\" > counter"
   }
-}
-
-variable "index" {
-  type = number
-  default = 1 
 }
 
 resource "null_resource" "wait" {
@@ -104,23 +99,7 @@ resource "null_resource" "wait" {
   }
 }
 
-
-
-
-
-
-# The primary use-case for the null resource is as a do-nothing container
-# for arbitrary actions taken by a provisioner.
-#
-# Due to the triggers map, the null_resource will be replaced 
-# each time the instance ids # change, and thus the remote-exec 
-# provisioner will be re-run.
-resource "null_resource" "cluster" {
-  # Changes to any instance of the cluster requires re-provisioning
-  triggers = {
-    cluster_instance_ids = join(",", aws_instance.cluster.*.id)
-  }
-}
+############################# TEMPORARY (HOPEFULLY) SOLUTION TO RKE PROVISIONING RE-APPLY ISSUE #############################
 
 # print the instance info
 output "instance_public_ip" {
@@ -352,3 +331,4 @@ variable "rancher_chart_version" {}
 variable "rancher_password" {}
 variable "tls_cert" {}
 variable "tls_key" {}
+variable "index" {}
