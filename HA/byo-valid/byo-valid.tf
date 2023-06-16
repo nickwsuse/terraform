@@ -146,7 +146,7 @@ resource "aws_lb" "aws_lb" {
   name               = "${var.aws_prefix}-lb"
   internal           = false
   ip_address_type    = "ipv4"
-  subnets            = [var.aws_subnet_a]
+  subnets            = [var.aws_subnet_a, var.aws_subnet_b, var.aws_subnet_c]
 }
 
 # add a listener for port 80
