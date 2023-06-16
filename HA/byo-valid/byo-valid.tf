@@ -201,7 +201,7 @@ resource "time_sleep" "wait_for_cluster_ready" {
 
 ############################# K U B E R N E T E S #############################
 ############################# R K E   C L U S T E R #############################
-create a rke cluster
+# create an rke cluster
 resource "rke_cluster" "cluster" {
   depends_on = [time_sleep.wait_for_cluster_ready]
   ssh_key_path = var.ssh_private_key_path
