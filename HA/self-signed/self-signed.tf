@@ -58,8 +58,8 @@ resource "aws_instance" "aws_instance" {
   }
 
   tags = {
-    Name = "${var.aws_prefix}-${count.index}"
-    Owner = var.aws_owner_tag
+    Name        = "${var.aws_prefix}-${count.index}"
+    Owner       = var.aws_owner_tag
     DoNotDelete = var.aws_do_not_delete_tag
   }
 }
@@ -203,10 +203,6 @@ resource "rke_cluster" "cluster" {
 resource "local_file" "kube_config" {
   content     = "${rke_cluster.cluster.kube_config_yaml}"
   filename = var.kube_config_path
-
-  depends_on = [
-    rke_cluster.cluster
-  ]
 }
 
 ############################# H E L M #############################
@@ -248,11 +244,12 @@ resource "helm_release" "rancher" {
     name  = "bootstrapPassword"
     value = var.rancher_password
   }
-
-  set {
-    name  = "rancherImageTag"
-    value = var.rancher_tag_version
-  }
+  
+  # if a rancherImageTag is used (not a chart) then set parameter for rancherImageTag needs to be uncommented and specified 
+  # set {
+  #   name  = "rancherImageTag"
+  #   value = var.rancher_tag_version
+  # }
 
   # wait for certs to be installed first
   depends_on = [ 
