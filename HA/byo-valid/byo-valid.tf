@@ -8,7 +8,7 @@ terraform {
     }
     rke = {
       source = "rancher/rke"
-      version = "1.3.4"
+      version = "1.4.1"
     }
     local = {
       source = "hashicorp/local"
@@ -83,24 +83,6 @@ resource "aws_instance" "cluster" {
   }
 }
 
-############################# TEMPORARY (HOPEFULLY) SOLUTION TO RKE PROVISIONING RE-APPLY ISSUE #############################
-
-resource "null_resource" "set_initial_state" {
-  provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
-    command = "echo \"0\" > counter"
-  }
-}
-
-resource "null_resource" "wait" {
-  provisioner "local-exec" {
-    interpreter = ["bash", "-c"]
-    command = "while [[ $(cat counter) != \"${var.index}\" ]]; do sleep 5; done; sleep 3;"
-  }
-}
-
-############################# TEMPORARY (HOPEFULLY) SOLUTION TO RKE PROVISIONING RE-APPLY ISSUE #############################
-
 # print the instance info
 output "instance_public_ip" {
   value = [for instance in aws_instance.cluster : instance.public_ip]
@@ -142,6 +124,7 @@ resource "aws_lb_target_group" "aws_lb_target_group_443" {
 
 # attach instances to the target group 80
 resource "aws_lb_target_group_attachment" "attach_tg_80" {
+  depends_on       = [aws_lb.aws_lb]
   count            = length(aws_instance.cluster)
   target_group_arn = aws_lb_target_group.aws_lb_target_group_80.arn
   target_id        = aws_instance.cluster[count.index].id
@@ -150,6 +133,7 @@ resource "aws_lb_target_group_attachment" "attach_tg_80" {
 
 # attach instances to the target group 443
 resource "aws_lb_target_group_attachment" "attach_tg_443" {
+  depends_on       = [aws_lb.aws_lb]
   count            = length(aws_instance.cluster)
   target_group_arn = aws_lb_target_group.aws_lb_target_group_443.arn
   target_id        = aws_instance.cluster[count.index].id
@@ -162,7 +146,7 @@ resource "aws_lb" "aws_lb" {
   name               = "${var.aws_prefix}-lb"
   internal           = false
   ip_address_type    = "ipv4"
-  subnets            = [var.aws_subnet_a, var.aws_subnet_b, var.aws_subnet_c]
+  subnets            = [var.aws_subnet_a]
 }
 
 # add a listener for port 80
@@ -209,12 +193,20 @@ output "route_53_record" {
   value = aws_route53_record.route_53_record.fqdn
 }
 
+resource "time_sleep" "wait_for_cluster_ready" {
+  create_duration = "180s"
+
+  depends_on = [aws_instance.cluster]
+}
+
 ############################# K U B E R N E T E S #############################
 ############################# R K E   C L U S T E R #############################
-# create a rke cluster
+create a rke cluster
 resource "rke_cluster" "cluster" {
+  depends_on = [time_sleep.wait_for_cluster_ready]
   ssh_key_path = var.ssh_private_key_path
   kubernetes_version = var.k8s_version
+  delay_on_creation = 180
 
   nodes {
     address          = aws_instance.cluster[0].public_ip
@@ -317,6 +309,7 @@ variable "aws_subnet_a" {}
 variable "aws_subnet_b" {}
 variable "aws_subnet_c" {}
 variable "aws_security_group" {}
+variable "aws_jenkins_security_group" {}
 variable "aws_key_name" {}
 variable "aws_instance_size" {}
 variable "aws_vpc" {}
