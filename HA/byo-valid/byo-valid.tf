@@ -197,43 +197,29 @@ resource "null_resource" "rke_up"{
   provisioner "local-exec"{
     command = "rke up --config ${local_file.create_rke_config.filename}"
   }
+}
 
-  provisioner "local-exec"{
-    command = "export KUBECONFIG=${var.kubeconfig_path}/kube_config_${var.rke_config_filename}"
-  }
-
+resource "null_resource" "cattle_system_namespace"{
+  depends_on = [null_resource.rke_up]
     provisioner "local-exec"{
-    command = "kubectl create namespace cattle-system"
+      command = "kubectl create namespace cattle-system"
+      environment = {
+        KUBECONFIG = "${var.kubeconfig_path}/kube_config_${var.rke_config_filename}"
+      }
+    }
+}
+
+resource "null_resource" "tls_secret" {
+  depends_on = [null_resource.cattle_system_namespace]
+  provisioner "local-exec" {
+    command = "kubectl -n cattle-system create secret tls tls-rancher-ingress --cert=${var.tls_crt} --key=${var.tls_key}"
+    environment = {
+      KUBECONFIG = "${var.kubeconfig_path}/kube_config_${var.rke_config_filename}"
+    }
   }
 }
 
 ############################# H E L M #############################
-# install certs
-# resource "kubernetes_namespace" "cattle_system"{
-#   metadata {
-#     name = "cattle-system"
-#   }
-
-#   depends_on = [null_resource.rke_up]
-# }
-
-resource "kubernetes_secret" "tls" {
-  metadata {
-    name = "tls-rancher-ingress"
-    namespace = "cattle-system"
-  }
-
-  data = {
-    "tls.crt" = file(var.tls_cert)
-    "tls.key" = file(var.tls_key)
-  }
-
-  type = "kubernetes.io/tls"
-
-  # wait for cluster and namespace ready
-  depends_on = [null_resource.rke_up]
-}
-
 # install rancher
 resource "helm_release" "rancher" {
   name       = "rancher"
@@ -248,7 +234,7 @@ resource "helm_release" "rancher" {
     value = aws_route53_record.route_53_record.fqdn
   }
 
-  # Uncomment if you're going to use an image tag such as v2.7-head
+  # Uncomment if you're going to use an image tag such as v2.7-head. Or do the opposite if it applies, whatever you want it's your build :)
   # set {
   #   name  = "rancherImageTag"
   #   value = var.rancher_tag_version
@@ -266,7 +252,7 @@ resource "helm_release" "rancher" {
 
   # wait for certs to be installed first
   depends_on = [ 
-    kubernetes_secret.tls
+    null_resource.tls_secret
   ]
 }
 
@@ -307,5 +293,5 @@ variable "kubeconfig_path" {}
 variable "rancher_tag_version" {}
 variable "rancher_chart_version" {}
 variable "rancher_password" {}
-variable "tls_cert" {}
+variable "tls_crt" {}
 variable "tls_key" {}
