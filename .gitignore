@@ -41,10 +41,12 @@ terraform.tfvars.json
 *.auto.tfvars
 *.auto.tfvars.json
 
-# Ignore the variables file, kubeconfig, and tls files
+# Ignore various other files
 variables.sh
 tls.cert
 tls.key
 *.yaml
+*.yml
 *.zip
 tfplan
+*.rkestate

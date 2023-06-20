@@ -4,28 +4,19 @@ terraform {
   required_providers {
     aws = {
       source  = "hashicorp/aws"
-      version = "3.74.0"
-    }
-    rke = {
-      source = "rancher/rke"
-      version = "1.4.1"
+      version = "5.4.0"
     }
     local = {
       source = "hashicorp/local"
-      version = "2.1.0"
+      version = "2.4.0"
     }
     helm = {
       source = "hashicorp/helm"
-      version = "2.4.1"
+      version = "2.10.1"
     }
     kubernetes = {
       source = "hashicorp/kubernetes"
-      version = "2.17.0"
-    }
-
-    null = {
-      source = "hashicorp/null"
-      version = "3.2.1"
+      version = "2.21.1"
     }
   }
 }
@@ -36,29 +27,15 @@ provider "aws" {
   secret_key = var.aws_secret_key
 }
 
-provider "rke" {
-  # Configuration options
-}
-
 provider "local" {
   # Configuration options
 }
 
 provider "helm" {
-  # Configuration options
   # kube config location to be used by helm to connect to the cluster
-    kubernetes {
-    config_path = "${local_file.kube_config.filename}"
+  kubernetes {
+    config_path = "${var.kubeconfig_path}/kube_config_${var.rke_config_filename}"
   }
-}
-
-provider "null" {
-  # Configuration options
-}
-
-provider "kubernetes" {
-  # configuration options
-  config_path = "${local_file.kube_config.filename}"
 }
 
 ############################# E C 2   I N F R A S T R U C T U R E #############################
@@ -81,14 +58,6 @@ resource "aws_instance" "cluster" {
     Owner       = var.aws_owner_tag
     DoNotDelete = var.aws_do_not_delete_tag
   }
-}
-
-# print the instance info
-output "instance_public_ip" {
-  value = [for instance in aws_instance.cluster : instance.public_ip]
-}
-output "instance_private_ip" {
-  value = [for instance in aws_instance.cluster : instance.private_ip]
 }
 
 ############################# L O A D   B A L A N C I N G #############################
@@ -124,8 +93,7 @@ resource "aws_lb_target_group" "aws_lb_target_group_443" {
 
 # attach instances to the target group 80
 resource "aws_lb_target_group_attachment" "attach_tg_80" {
-  depends_on       = [aws_lb.aws_lb]
-  count            = length(aws_instance.cluster)
+  count = length(aws_instance.cluster)
   target_group_arn = aws_lb_target_group.aws_lb_target_group_80.arn
   target_id        = aws_instance.cluster[count.index].id
   port             = 80
@@ -133,8 +101,7 @@ resource "aws_lb_target_group_attachment" "attach_tg_80" {
 
 # attach instances to the target group 443
 resource "aws_lb_target_group_attachment" "attach_tg_443" {
-  depends_on       = [aws_lb.aws_lb]
-  count            = length(aws_instance.cluster)
+  count = length(aws_instance.cluster)
   target_group_arn = aws_lb_target_group.aws_lb_target_group_443.arn
   target_id        = aws_instance.cluster[count.index].id
   port             = 443
@@ -188,69 +155,72 @@ resource "aws_route53_record" "route_53_record" {
   records = [aws_lb.aws_lb.dns_name]
 }
 
-# print route53 full record
-output "route_53_record" {
-  value = aws_route53_record.route_53_record.fqdn
+############################# K U B E R N E T E S #############################
+############################# R K E   C L U S T E R #############################
+###### OUTPUT INSTANCE INFO TO RKE CONFIG FILE ######
+resource "local_file" "create_rke_config"{
+    # set path to ssh private key so rke can ssh into each node for provisioning
+    # kubernetes_version is not required, if null rke uses latest
+    content = <<EOT
+ssh_key_path: ${var.ssh_private_key_path}
+kubernetes_version: ${var.k8s_version}
+
+nodes:
+- address: ${aws_instance.cluster[0].public_ip}
+  internal_address: ${aws_instance.cluster[0].private_ip}
+  user: ${var.cluster_user}
+  role: ${var.cluster_roles}
+
+- address: ${aws_instance.cluster[1].public_ip}
+  internal_address: ${aws_instance.cluster[1].private_ip}
+  user: ${var.cluster_user}
+  role: ${var.cluster_roles}
+
+- address: ${aws_instance.cluster[2].public_ip}
+  internal_address: ${aws_instance.cluster[2].private_ip}
+  user: ${var.cluster_user}
+  role: ${var.cluster_roles}
+    EOT
+    filename = var.rke_config_filename
 }
 
+# wait for one minute to ensure clusters are ready for rke up command
 resource "time_sleep" "wait_for_cluster_ready" {
-  create_duration = "180s"
+  create_duration = "60s"
 
   depends_on = [aws_instance.cluster]
 }
 
-############################# K U B E R N E T E S #############################
-############################# R K E   C L U S T E R #############################
-# create an rke cluster
-resource "rke_cluster" "cluster" {
+# rather than using the rke tf provider, run the rke up command using the config file generated above
+resource "null_resource" "rke_up"{
   depends_on = [time_sleep.wait_for_cluster_ready]
-  ssh_key_path = var.ssh_private_key_path
-  kubernetes_version = var.k8s_version
-  delay_on_creation = 180
-
-  nodes {
-    address          = aws_instance.cluster[0].public_ip
-    internal_address = aws_instance.cluster[0].private_ip
-    user             = "ubuntu"
-    role             = ["controlplane", "worker", "etcd"]
+  provisioner "local-exec"{
+    command = "rke up --config ${local_file.create_rke_config.filename}"
   }
-    nodes {
-    address = aws_instance.cluster[1].public_ip
-    internal_address = aws_instance.cluster[1].private_ip
-    user    = "ubuntu"
-    role    = ["controlplane", "worker", "etcd"]
-  }
-    nodes {
-    address = aws_instance.cluster[2].public_ip
-    internal_address = aws_instance.cluster[2].private_ip
-    user    = "ubuntu"
-    role    = ["controlplane", "worker", "etcd"]
-  } 
-}
 
-############################# L O C A L   S E T U P #############################
-# save kubeconfig file on the local 
-resource "local_file" "kube_config" {
-  depends_on  = [rke_cluster.cluster]
-  content     = "${rke_cluster.cluster.kube_config_yaml}"
-  filename    = var.kube_config_path
+  provisioner "local-exec"{
+    command = "export KUBECONFIG=${var.kubeconfig_path}/kube_config_${var.rke_config_filename}"
+  }
+
+    provisioner "local-exec"{
+    command = "kubectl create namespace cattle-system"
+  }
 }
 
 ############################# H E L M #############################
-resource "kubernetes_namespace" "cattle_system"{
-  metadata {
-    name = "cattle-system"
-  }
+# install certs
+# resource "kubernetes_namespace" "cattle_system"{
+#   metadata {
+#     name = "cattle-system"
+#   }
 
-  depends_on = [
-    local_file.kube_config
-  ]
-}
+#   depends_on = [null_resource.rke_up]
+# }
 
 resource "kubernetes_secret" "tls" {
   metadata {
     name = "tls-rancher-ingress"
-    namespace = kubernetes_namespace.cattle_system.metadata[0].name
+    namespace = "cattle-system"
   }
 
   data = {
@@ -260,32 +230,31 @@ resource "kubernetes_secret" "tls" {
 
   type = "kubernetes.io/tls"
 
-  # wait for kube config file to be created
-  depends_on = [ 
-    kubernetes_namespace.cattle_system
-  ]
+  # wait for cluster and namespace ready
+  depends_on = [null_resource.rke_up]
 }
 
 # install rancher
 resource "helm_release" "rancher" {
-  depends_on = [rke_cluster.cluster]
   name       = "rancher"
   repository = "https://releases.rancher.com/server-charts/latest"
   chart      = "rancher"
   version    = var.rancher_chart_version
-  namespace  = "cattle-system"
+  create_namespace = "true"
+  namespace = "cattle-system"
 
   set {
     name  = "hostname"
     value = aws_route53_record.route_53_record.fqdn
-  } 
-  
-  set {
-    name  = "rancherImageTag"
-    value = var.rancher_tag_version
   }
 
-   set {
+  # Uncomment if you're going to use an image tag such as v2.7-head
+  # set {
+  #   name  = "rancherImageTag"
+  #   value = var.rancher_tag_version
+  # }
+
+  set {
     name  = "bootstrapPassword"
     value = var.rancher_password
   }
@@ -294,11 +263,18 @@ resource "helm_release" "rancher" {
     name = "ingress.tls.source"
     value = "secret"
   }
+
+  # wait for certs to be installed first
+  depends_on = [ 
+    kubernetes_secret.tls
+  ]
 }
 
 ############################# V A R I A B L E S #############################
 # not all variables listed below are needed for this set up to work
 # values for these variables are stored in a `variables.sh` file (see README)
+
+# aws variables
 variable "aws_prefix" {}
 variable "aws_region" {}
 variable "aws_access_key" {}
@@ -316,12 +292,20 @@ variable "aws_vpc" {}
 variable "aws_route_zone_name" {}
 variable "aws_owner_tag" {}
 variable "aws_do_not_delete_tag" {}
+
+# ssh variables
 variable "ssh_private_key_path" {}
+
+# rke variables
 variable "k8s_version" {}
-variable "kube_config_path" {}
+variable "cluster_user" {}
+variable "cluster_roles" {}
+variable "rke_config_filename" {}
+variable "kubeconfig_path" {}
+
+# rancher variables
 variable "rancher_tag_version" {}
 variable "rancher_chart_version" {}
 variable "rancher_password" {}
 variable "tls_cert" {}
 variable "tls_key" {}
-variable "index" {}
