@@ -43,8 +43,8 @@ terraform.tfvars.json
 
 # Ignore various other files
 variables.sh
-tls.cert
-tls.key
+*.crt
+*.key
 *.yaml
 *.yml
 *.zip
