@@ -162,6 +162,11 @@ resource "local_file" "create_rke_config"{
     # set path to ssh private key so rke can ssh into each node for provisioning
     # kubernetes_version is not required, if null rke uses latest
     content = <<EOT
+services:
+  kube-api:
+    pod_security_configuration: ${var.pod_security_configuration} 
+    pod_security_policy: ${var.pod_security_policy}
+
 ssh_key_path: ${var.ssh_private_key_path}
 kubernetes_version: ${var.k8s_version}
 
@@ -219,15 +224,17 @@ resource "null_resource" "tls_secret" {
   }
 }
 
+
+
 ############################# H E L M #############################
 # install rancher
 resource "helm_release" "rancher" {
-  name       = "rancher"
-  repository = "https://releases.rancher.com/server-charts/latest"
-  chart      = "rancher"
-  version    = var.rancher_chart_version
+  name             = "rancher"
+  repository       = "https://releases.rancher.com/server-charts/latest"
+  chart            = "rancher"
+  version          = var.rancher_chart_version
   create_namespace = "true"
-  namespace = "cattle-system"
+  namespace        = "cattle-system"
 
   set {
     name  = "hostname"
@@ -246,14 +253,17 @@ resource "helm_release" "rancher" {
   }
 
   set{
-    name = "ingress.tls.source"
+    name  = "ingress.tls.source"
     value = "secret"
   }
 
+  set{
+    name  = "global.cattle.psp.enabled"
+    value = var.pod_security_policy
+  }
+
   # wait for certs to be installed first
-  depends_on = [ 
-    null_resource.tls_secret
-  ]
+  depends_on = [null_resource.tls_secret]
 }
 
 ############################# V A R I A B L E S #############################
@@ -288,6 +298,8 @@ variable "cluster_user" {}
 variable "cluster_roles" {}
 variable "rke_config_filename" {}
 variable "kubeconfig_path" {}
+variable "pod_security_configuration" {}
+variable "pod_security_policy" {}
 
 # rancher variables
 variable "rancher_tag_version" {}
